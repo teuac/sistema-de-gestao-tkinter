@@ -77,37 +77,62 @@ class Pedido:
 # ===========================================================
 # Modelo: ItemPedido
 # ===========================================================
+
 class ItemPedido:
-    def __init__(self, pedido_id, produto, quantidade, preco_unit, id=None):
+    def __init__(self, pedido_id, produto_id, quantidade, id=None):
         self.id = id
         self.pedido_id = pedido_id
-        self.produto = produto
+        self.produto_id = produto_id
         self.quantidade = quantidade
-        self.preco_unit = preco_unit
 
     def salvar(self):
-        """Insere ou atualiza um item do pedido."""
+        """Insere ou atualiza um item do pedido. Apenas produto_id e quantidade são armazenados;
+        nome e preço são obtidos via join com a tabela produtos quando necessário."""
         if self.id:
-            query = """
-                UPDATE itens_pedido
-                SET pedido_id=?, produto=?, quantidade=?, preco_unit=?
-                WHERE id=?
-            """
-            parametros = (self.pedido_id, self.produto, self.quantidade, self.preco_unit, self.id)
+            query = "UPDATE itens_pedido SET pedido_id=?, produto_id=?, quantidade=? WHERE id=?"
+            parametros = (self.pedido_id, self.produto_id, self.quantidade, self.id)
         else:
-            query = """
-                INSERT INTO itens_pedido (pedido_id, produto, quantidade, preco_unit)
-                VALUES (?, ?, ?, ?)
-            """
-            parametros = (self.pedido_id, self.produto, self.quantidade, self.preco_unit)
+            query = "INSERT INTO itens_pedido (pedido_id, produto_id, quantidade) VALUES (?, ?, ?)"
+            parametros = (self.pedido_id, self.produto_id, self.quantidade)
         return executar_query(query, parametros)
 
     @staticmethod
     def listar_por_pedido(pedido_id):
-        """Lista todos os itens de um pedido específico."""
-        return consultar("SELECT * FROM itens_pedido WHERE pedido_id=?", (pedido_id,))
+        """Lista todos os itens de um pedido com dados do produto via JOIN (id, produto_id, nome, preco_unit, quantidade)."""
+        query = (
+            "SELECT ip.id, ip.produto_id, p.nome, p.preco_unit, ip.quantidade "
+            "FROM itens_pedido ip JOIN produtos p ON ip.produto_id = p.id WHERE ip.pedido_id = ?"
+        )
+        return consultar(query, (pedido_id,))
 
     @staticmethod
     def deletar(item_id):
         """Remove um item do pedido."""
         return executar_query("DELETE FROM itens_pedido WHERE id=?", (item_id,))
+
+
+# ===========================================================
+# Modelo: Produto
+# ===========================================================
+class Produto:
+    def __init__(self, nome, preco_unit, id=None):
+        self.id = id
+        self.nome = nome
+        self.preco_unit = preco_unit
+
+    def salvar(self):
+        if self.id:
+            query = "UPDATE produtos SET nome=?, preco_unit=? WHERE id=?"
+            parametros = (self.nome, self.preco_unit, self.id)
+        else:
+            query = "INSERT INTO produtos (nome, preco_unit) VALUES (?, ?)"
+            parametros = (self.nome, self.preco_unit)
+        return executar_query(query, parametros)
+
+    @staticmethod
+    def listar():
+        return consultar("SELECT * FROM produtos")
+
+    @staticmethod
+    def deletar(produto_id):
+        return executar_query("DELETE FROM produtos WHERE id=?", (produto_id,))

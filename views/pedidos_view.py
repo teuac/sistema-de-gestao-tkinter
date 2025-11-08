@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, Toplevel
-from models import Cliente, Pedido, ItemPedido
+from models import Cliente, Pedido, ItemPedido, Produto
 from datetime import datetime
 
 
@@ -49,10 +49,13 @@ class PedidosView(ttk.Frame):
         ttk.Label(self, text="Itens do Pedido Selecionado").grid(row=3, column=0, columnspan=2, pady=10)
 
         colunas_itens = ("id", "produto", "quantidade", "preco_unit", "subtotal")
+        # agora armazenamos também produto_id (oculto) para referenciar produtos cadastrados
+        colunas_itens = ("produto_id", "produto", "quantidade", "preco_unit", "subtotal")
         self.tree_itens = ttk.Treeview(self, columns=colunas_itens, show="headings", height=7)
         for col in colunas_itens:
             self.tree_itens.heading(col, text=col.capitalize())
-        self.tree_itens.column("id", width=50, anchor="center")
+        # Esconde coluna produto_id (mantém referência)
+        self.tree_itens.column("produto_id", width=0, stretch=False)
         self.tree_itens.column("produto", width=280)
         self.tree_itens.column("quantidade", width=100, anchor="center")
         self.tree_itens.column("preco_unit", width=120, anchor="e")
@@ -70,6 +73,11 @@ class PedidosView(ttk.Frame):
     def carregar_clientes(self):
         clientes = Cliente.listar()
         return [f"{c[0]} - {c[1]}" for c in clientes]
+
+    def carregar_produtos(self):
+        produtos = Produto.listar()
+        # formato: "id - nome - preço"
+        return [f"{p[0]} - {p[1]} - {p[2]:.2f}" for p in produtos]
 
     def validar_data(self, data):
         try:
@@ -138,11 +146,13 @@ class PedidosView(ttk.Frame):
         frame_itens = tk.LabelFrame(modal, text="Itens do Pedido")
         frame_itens.pack(fill="both", expand=True, padx=10, pady=10)
 
-        colunas = ("produto", "quantidade", "preco_unit", "subtotal")
+        colunas = ("produto_id", "produto", "quantidade", "preco_unit", "subtotal")
         tree_itens_modal = ttk.Treeview(frame_itens, columns=colunas, show="headings", height=6)
         for col in colunas:
             tree_itens_modal.heading(col, text=col.capitalize())
-        for c, w in zip(colunas, [160, 80, 100, 100]):
+        # Esconde coluna produto_id (mantém referência)
+        tree_itens_modal.column("produto_id", width=0, stretch=False)
+        for c, w in zip(["produto", "quantidade", "preco_unit", "subtotal"], [200, 80, 100, 100]):
             tree_itens_modal.column(c, width=w)
         tree_itens_modal.pack(fill="both", expand=True, padx=5, pady=5)
 
@@ -154,39 +164,105 @@ class PedidosView(ttk.Frame):
         def adicionar_item():
             item_modal = Toplevel(modal)
             item_modal.title("Adicionar Item")
-            item_modal.geometry("300x250")
+            item_modal.geometry("360x300")
             item_modal.resizable(False, False)
             item_modal.grab_set()
 
-            tk.Label(item_modal, text="Produto:").pack(pady=5)
-            entry_produto = tk.Entry(item_modal, width=30)
-            entry_produto.pack(pady=5)
+            tk.Label(item_modal, text="Pesquisar produto:").pack(pady=4)
+            entry_search = ttk.Entry(item_modal, width=40)
+            entry_search.pack(pady=4)
 
-            tk.Label(item_modal, text="Quantidade:").pack(pady=5)
-            entry_qtd = tk.Entry(item_modal, width=30)
-            entry_qtd.pack(pady=5)
+            # Listbox com resultados pesquisáveis
+            listbox_frame = ttk.Frame(item_modal)
+            listbox_frame.pack(fill="both", expand=False, padx=6, pady=4)
+            listbox = tk.Listbox(listbox_frame, height=6, width=48)
+            listbox.pack(side="left", fill="both", expand=True)
+            lb_scroll = ttk.Scrollbar(listbox_frame, orient="vertical", command=listbox.yview)
+            lb_scroll.pack(side="right", fill="y")
+            listbox.configure(yscrollcommand=lb_scroll.set)
 
-            tk.Label(item_modal, text="Preço Unitário (R$):").pack(pady=5)
-            entry_preco = tk.Entry(item_modal, width=30)
-            entry_preco.pack(pady=5)
+            produtos_cache = Produto.listar() or []  # list of tuples (id, nome, preco_unit)
+
+            def refresh_listbox(filter_text=""):
+                listbox.delete(0, tk.END)
+                ft = filter_text.strip().lower()
+                for p in produtos_cache:
+                    pid, nome, preco = p
+                    display = f"{pid} - {nome}  (R$ {preco:.2f})"
+                    if not ft or ft in nome.lower() or ft in str(pid):
+                        listbox.insert(tk.END, display)
+
+            refresh_listbox()
+
+            tk.Label(item_modal, text="Quantidade:").pack(pady=4)
+            entry_qtd = ttk.Entry(item_modal, width=20)
+            entry_qtd.pack(pady=4)
+
+            tk.Label(item_modal, text="Preço Unitário (R$):").pack(pady=4)
+            preco_var = tk.StringVar(value="0.00")
+            lbl_preco = ttk.Label(item_modal, textvariable=preco_var, width=20, anchor="w")
+            lbl_preco.pack(pady=2)
+
+            # atualizar listbox ao digitar
+            def on_search_key(e=None):
+                refresh_listbox(entry_search.get())
+
+            entry_search.bind("<KeyRelease>", on_search_key)
+
+            # quando selecionar na listbox, preencher preço
+            def on_listbox_select(e=None):
+                sel = listbox.curselection()
+                if not sel:
+                    return
+                text = listbox.get(sel[0])
+                try:
+                    pid = int(text.split(" - ")[0])
+                except Exception:
+                    pid = None
+                if pid is None:
+                    return
+                # buscar produto no cache
+                for p in produtos_cache:
+                    if p[0] == pid:
+                        preco_var.set(f"{p[2]:.2f}")
+                        break
+
+            listbox.bind("<<ListboxSelect>>", on_listbox_select)
 
             def salvar_item():
-                produto = entry_produto.get().strip()
+                sel = None
+                cur = listbox.curselection()
+                if cur:
+                    sel = listbox.get(cur[0])
                 qtd = entry_qtd.get().strip()
-                preco = entry_preco.get().strip()
+                preco = preco_var.get().strip()
 
-                if not produto or not qtd or not preco:
-                    messagebox.showwarning("Campos obrigatórios", "Preencha todos os campos!")
+                if not sel or not qtd:
+                    messagebox.showwarning("Campos obrigatórios", "Selecione um produto e informe a quantidade!")
                     return
                 try:
                     qtd = int(qtd)
-                    preco = float(preco)
                 except ValueError:
-                    messagebox.showerror("Erro", "Quantidade e preço devem ser numéricos.")
+                    messagebox.showerror("Erro", "Quantidade deve ser um número inteiro.")
                     return
 
-                subtotal = qtd * preco
-                tree_itens_modal.insert("", "end", values=(produto, qtd, f"{preco:.2f}", f"{subtotal:.2f}"))
+                try:
+                    prod_id = int(sel.split(" - ")[0])
+                except Exception:
+                    messagebox.showerror("Erro", "Produto inválido selecionado.")
+                    return
+
+                # obter preço do cache
+                preco_f = 0.0
+                for p in produtos_cache:
+                    if p[0] == prod_id:
+                        preco_f = float(p[2])
+                        prod_nome = p[1]
+                        break
+
+                subtotal = qtd * preco_f
+                # armazenamos produto_id como primeira coluna (oculta)
+                tree_itens_modal.insert("", "end", values=(prod_id, prod_nome, qtd, f"{preco_f:.2f}", f"{subtotal:.2f}"))
                 total_var.set(total_var.get() + subtotal)
                 item_modal.destroy()
 
@@ -215,10 +291,12 @@ class PedidosView(ttk.Frame):
             pedidos = Pedido.listar()
             novo_id = pedidos[-1][0]
 
-            # Salva itens
+            # Salva itens (ItemPedido aceita: pedido_id, produto_id, quantidade)
             for item in tree_itens_modal.get_children():
-                produto, qtd, preco, _ = tree_itens_modal.item(item)["values"]
-                item_p = ItemPedido(novo_id, produto, int(qtd), float(preco))
+                vals = tree_itens_modal.item(item)["values"]
+                produto_id = int(vals[0])
+                qtd = int(vals[2])
+                item_p = ItemPedido(novo_id, produto_id, qtd)
                 item_p.salvar()
 
             self.listar_pedidos()
@@ -245,6 +323,12 @@ class PedidosView(ttk.Frame):
         itens = ItemPedido.listar_por_pedido(pedido_id)
         total = 0
         for item in itens:
-            subtotal = item[3] * item[4]
+            # item: (id, produto_id, nome, preco_unit, quantidade)
+            produto_id = item[1]
+            nome = item[2]
+            preco = float(item[3])
+            qtd = int(item[4])
+            subtotal = preco * qtd
             total += subtotal
-            self.tree_itens.insert("", "end", values=(item[0], item[2], item[3], f"{item[4]:.2f}", f"{subtotal:.2f}"))
+            # inserimos produto_id (oculto), nome, qtd, preco, subtotal
+            self.tree_itens.insert("", "end", values=(produto_id, nome, qtd, f"{preco:.2f}", f"{subtotal:.2f}"))
